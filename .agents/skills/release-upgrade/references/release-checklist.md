@@ -10,6 +10,18 @@ git rev-parse --abbrev-ref HEAD
 rg -n '^version\s*=\s*"' Cargo.toml
 ```
 
+If the working tree is dirty and the user asked to release, treat that request as approval to use release-related Git cleanup steps, including stash-based workflows.
+
+Typical cleanup sequence for unrelated local changes:
+
+```bash
+git stash push -u -m "release-prep"
+# run release workflow
+git stash pop
+```
+
+If the stash restore conflicts, stop and report the conflict set clearly.
+
 Update version fields.
 
 ```bash
@@ -47,6 +59,15 @@ git commit -m "chore(release): bump version to X.Y.Z"
 git push origin <branch>
 ```
 
+If the local branch is behind remote, use normal sync operations before pushing, for example:
+
+```bash
+git fetch origin
+git rebase origin/<branch>
+```
+
+If sync requires a more invasive history rewrite than a normal release flow, stop and report exactly what blocks the push.
+
 Publish.
 
 ```bash
@@ -67,6 +88,7 @@ git push origin vX.Y.Z
 
 - `working directory contains changes not yet committed`.
   - Commit release files first, then publish without `--allow-dirty`.
+  - If unrelated local changes are present, stash them as part of release prep and restore them after publish/tag steps complete.
 
 - `clippy` warnings.
   - Fix warnings before publish. Do not bypass with allow flags.

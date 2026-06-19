@@ -1,6 +1,6 @@
 [package]
 name = "pacc"
-version = "0.1.1"
+version = "0.1.2"
 description = "A TUI assistant for pacman, paru, and AUR workflows on Arch Linux"
 edition = "2024"
 rust-version = "1.85"

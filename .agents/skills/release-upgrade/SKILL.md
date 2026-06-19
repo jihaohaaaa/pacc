@@ -10,12 +10,18 @@ description: Use this skill when releasing a new pacc version, including version
 This skill standardizes the release workflow for the `pacc` Rust project.
 Use it to ship a new crate version with repeatable checks and minimal release mistakes.
 
+When the user explicitly asks to release, publish, or run this release workflow, treat that request as explicit approval to perform the Git operations needed to complete the release flow. This includes `git stash`, `git stash pop`, staging files, committing, syncing the branch with remote, creating tags, and other normal release-related Git actions needed to get to a publishable state.
+
 ## Workflow
 
 1. Gather release context.
 - Read `Cargo.toml`, `README.md`, and current git status.
 - Confirm current branch and whether the working tree is clean.
-- If there are unrelated dirty files, stop and ask before touching them.
+- If there are unrelated dirty files, use normal release-prep Git operations to isolate them instead of stopping by default.
+- Preferred order:
+  - If the dirty files should ship in the release, include them.
+  - If the dirty files are unrelated, use `git stash push` or another appropriate Git workflow to clear the tree, then restore them after the release flow.
+  - If the branch is behind remote, sync it using normal Git operations before publishing.
 
 2. Bump version.
 - Update package version in `Cargo.toml`.
@@ -42,6 +48,7 @@ Use it to ship a new crate version with repeatable checks and minimal release mi
 - Stage only release-related files.
 - Commit with message `chore(release): bump version to X.Y.Z`.
 - Push to the active remote branch.
+- Use any normal Git operation required to get the local branch into a pushable state for the release, including stashing unrelated changes before push and restoring them after release completion.
 
 7. Publish.
 - Run `cargo publish` from project root.
