@@ -11,6 +11,7 @@ homepage = "https://github.com/jihaohaaaa/pacc"
 documentation = "https://docs.rs/pacc"
 keywords = ["archlinux", "pacman", "paru", "aur", "tui"]
 categories = ["command-line-utilities"]
+exclude = [".agents/**"]
 
 [dependencies]
 color-eyre = "0.6"
