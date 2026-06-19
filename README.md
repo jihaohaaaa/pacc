@@ -4,9 +4,10 @@
 It aims to put `pacman`, `paru`, and AUR-oriented workflows into one focused TUI so
 common maintenance tasks feel fast, visible, and safe.
 
-This project is currently in an early scaffold stage. The UI shell is in place, and
-the next steps are wiring real package data, package actions, and safer command
-execution flows.
+This project is early but already usable for local package-maintenance review:
+it can inspect `paru` clone cache entries, move selected cache directories to
+trash, audit orphan packages, and remove selected orphans through an explicit
+confirmation flow.
 
 ## Goals
 
@@ -21,17 +22,20 @@ execution flows.
 The current build includes:
 
 - A Rust TUI built with `ratatui` and `crossterm`
-- Basic app state, focus management, and keyboard navigation
+- Workbench-style navigation with overview, cache, orphan, and action panes
 - Backend detection for `pacman` and `paru`
 - Keyword search over local `paru` cache and clone metadata
 - Cache entry inspection for PKGBUILD, git metadata, and archived package files
+- Single and multi-select cache cleanup using `gio trash`
+- Orphan package audit using `pacman -Qdtq`
+- Single and multi-select orphan removal using `sudo -n pacman -Rns`
 
 ## Planned Features
 
 - Real package inventory from `pacman -Q`
 - Upgrade views for official repos and AUR packages
 - Search, filtering, and per-package inspection
-- Action confirmations for sync, upgrade, remove, clean, and orphan flows
+- Action confirmations for sync, upgrade, and broader package flows
 - Background command execution and better error reporting
 
 ## Usage
@@ -43,13 +47,18 @@ cargo run
 Default keys:
 
 - `Tab`: switch focus
-- `/`: enter `paru` cache search mode
-- `Space`: toggle selection for the highlighted cache entry
-- `d`: open delete confirmation for the selected cache entry
+- `/`: search the active package workspace
+- `Space`: toggle selection for the highlighted cache or orphan entry
+- `d`: open delete confirmation for the selected cache or orphan entry
 - `Up` / `Down`: move selection
-- `Enter`: inspect the selected cache entry or trigger the selected action stub
-- `r`: refresh backend detection
+- `Enter`: inspect the selected package entry or trigger the selected action stub
+- `r`: refresh backend detection, cache index, and orphan audit
 - `q` or `Esc`: quit
+
+Cache deletion is intentionally limited to top-level directories below the
+detected `paru` clone directory and moves them to trash rather than deleting
+them permanently. Orphan removal is a real system package operation and uses
+`sudo -n pacman -Rns -- <targets>`, so it requires non-interactive sudo access.
 
 ## Development
 

@@ -1,7 +1,8 @@
 use std::{
+    collections::HashSet,
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, ExitStatus},
 };
 
 use color_eyre::{Result, eyre::eyre};
@@ -24,6 +25,15 @@ pub struct ParuCacheSummary {
     pub has_git_metadata: bool,
     pub package_archives: usize,
     pub source_archives: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrphanPackageSummary {
+    pub name: String,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub installed_size: Option<String>,
+    pub install_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -89,6 +99,125 @@ pub fn matches_keyword(entry: &ParuCacheSummary, keyword: &str) -> bool {
     keyword
         .split_whitespace()
         .all(|token| haystack.contains(&token.to_ascii_lowercase()))
+}
+
+pub fn matches_orphan_keyword(entry: &OrphanPackageSummary, keyword: &str) -> bool {
+    let keyword = keyword.trim();
+    if keyword.is_empty() {
+        return true;
+    }
+
+    let haystack = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        entry.name.to_ascii_lowercase(),
+        entry
+            .version
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+        entry
+            .description
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+        entry
+            .installed_size
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+        entry
+            .install_reason
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+    );
+
+    keyword
+        .split_whitespace()
+        .all(|token| haystack.contains(&token.to_ascii_lowercase()))
+}
+
+pub fn audit_orphan_packages() -> Result<Vec<OrphanPackageSummary>> {
+    let output = build_orphan_names_command().output().map_err(|error| {
+        eyre!("failed to execute pacman -Qdtq for orphan package audit: {error}")
+    })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stdout.trim().is_empty() && is_empty_orphan_query_error(&stderr) {
+            return Ok(Vec::new());
+        }
+
+        return Err(command_error(
+            "pacman -Qdtq for orphan package audit",
+            output.status,
+            &stdout,
+            &stderr,
+        ));
+    }
+
+    let names = parse_orphan_names(&stdout);
+    let mut packages = Vec::with_capacity(names.len());
+    for name in names {
+        let info = run_command_stdout(
+            build_orphan_info_command(&name),
+            &format!("pacman -Qi -- {name}"),
+        )?;
+        packages.push(parse_orphan_info(&name, &info));
+    }
+
+    packages.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(packages)
+}
+
+pub fn preview_remove_orphans(packages: &[String]) -> Result<Vec<String>> {
+    let command = build_preview_remove_orphans_command(packages)?;
+    let output = run_command_stdout(command, "pacman -Rns --print orphan package removal")?;
+    Ok(output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+pub fn remove_orphans(packages: &[String]) -> Result<()> {
+    let command = build_remove_orphans_command(packages)?;
+    run_command_stdout(command, "sudo -n pacman -Rns orphan package removal")?;
+    Ok(())
+}
+
+pub fn validate_orphan_remove_targets(
+    packages: &[String],
+    audited_packages: &[OrphanPackageSummary],
+) -> Result<Vec<String>> {
+    if packages.is_empty() {
+        return Err(eyre!(
+            "cannot remove orphan packages because no targets were provided"
+        ));
+    }
+
+    let audited = audited_packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    let mut targets = Vec::new();
+
+    for package in packages {
+        if !audited.contains(package.as_str()) {
+            return Err(eyre!(
+                "refusing to remove {package} because it is not in the current orphan audit"
+            ));
+        }
+
+        if seen.insert(package.as_str()) {
+            targets.push(package.clone());
+        }
+    }
+
+    Ok(targets)
 }
 
 pub fn inspect_cache(entry: &ParuCacheSummary) -> ParuCacheDetails {
@@ -201,6 +330,127 @@ fn detect_command(command: &str) -> BackendStatus {
         Ok(status) if status.success() => BackendStatus::Available,
         _ => BackendStatus::Missing,
     }
+}
+
+fn build_orphan_names_command() -> Command {
+    let mut command = Command::new("pacman");
+    command.args(["-Qdtq"]);
+    command
+}
+
+fn build_orphan_info_command(name: &str) -> Command {
+    let mut command = Command::new("pacman");
+    command.args(["-Qi", "--", name]);
+    command
+}
+
+fn build_preview_remove_orphans_command(packages: &[String]) -> Result<Command> {
+    if packages.is_empty() {
+        return Err(eyre!(
+            "cannot remove orphan packages because no targets were provided"
+        ));
+    }
+
+    let mut command = Command::new("pacman");
+    command.args(["-Rns", "--print", "--"]);
+    command.args(packages);
+    Ok(command)
+}
+
+fn build_remove_orphans_command(packages: &[String]) -> Result<Command> {
+    if packages.is_empty() {
+        return Err(eyre!(
+            "cannot remove orphan packages because no targets were provided"
+        ));
+    }
+
+    let mut command = Command::new("sudo");
+    command.args(["-n", "pacman", "-Rns", "--"]);
+    command.args(packages);
+    Ok(command)
+}
+
+fn run_command_stdout(mut command: Command, label: &str) -> Result<String> {
+    let output = command
+        .output()
+        .map_err(|error| eyre!("failed to execute {label}: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        return Err(command_error(label, output.status, &stdout, &stderr));
+    }
+
+    Ok(stdout.to_string())
+}
+
+fn command_error(
+    label: &str,
+    status: ExitStatus,
+    stdout: &str,
+    stderr: &str,
+) -> color_eyre::Report {
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+
+    if stderr.is_empty() && stdout.is_empty() {
+        return eyre!("{label} failed with status {status}");
+    }
+    if stderr.is_empty() {
+        return eyre!("{label} failed with status {status}: {stdout}");
+    }
+    if stdout.is_empty() {
+        return eyre!("{label} failed with status {status}: {stderr}");
+    }
+
+    eyre!("{label} failed with status {status}: {stderr}; stdout: {stdout}")
+}
+
+fn is_empty_orphan_query_error(stderr: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    stderr.contains("no targets specified")
+        || stderr.contains("no packages found")
+        || stderr.contains("not found")
+}
+
+fn parse_orphan_names(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn parse_orphan_info(name: &str, stdout: &str) -> OrphanPackageSummary {
+    let mut summary = OrphanPackageSummary {
+        name: name.to_string(),
+        version: None,
+        description: None,
+        installed_size: None,
+        install_reason: None,
+    };
+
+    for line in stdout.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+
+        let value = value.trim();
+        match key.trim() {
+            "Version" => summary.version = non_empty_value(value),
+            "Description" => summary.description = non_empty_value(value),
+            "Installed Size" => summary.installed_size = non_empty_value(value),
+            "Install Reason" => summary.install_reason = non_empty_value(value),
+            _ => {}
+        }
+    }
+
+    summary
+}
+
+fn non_empty_value(value: &str) -> Option<String> {
+    (!value.is_empty() && value != "None").then(|| value.to_string())
 }
 
 fn detect_paru_clone_dir() -> Option<PathBuf> {
@@ -493,6 +743,99 @@ url='https://code.visualstudio.com/'
         assert!(matches_keyword(&entry, "code 1.125"));
         assert!(matches_keyword(&entry, "modern"));
         assert!(!matches_keyword(&entry, "firefox"));
+    }
+
+    #[test]
+    fn parses_orphan_names_from_pacman_output() {
+        assert_eq!(
+            parse_orphan_names("alpha\n\n beta \n"),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+    }
+
+    #[test]
+    fn parses_orphan_info_from_pacman_output() {
+        let summary = parse_orphan_info(
+            "old-lib",
+            r#"
+Name            : old-lib
+Version         : 1.2.3-1
+Description     : A retired dependency
+Installed Size  : 3.14 MiB
+Install Reason  : Installed as a dependency for another package
+"#,
+        );
+
+        assert_eq!(summary.name, "old-lib");
+        assert_eq!(summary.version.as_deref(), Some("1.2.3-1"));
+        assert_eq!(summary.description.as_deref(), Some("A retired dependency"));
+        assert_eq!(summary.installed_size.as_deref(), Some("3.14 MiB"));
+        assert_eq!(
+            summary.install_reason.as_deref(),
+            Some("Installed as a dependency for another package")
+        );
+    }
+
+    #[test]
+    fn matches_orphan_keyword_across_metadata() {
+        let entry = OrphanPackageSummary {
+            name: "old-lib".to_string(),
+            version: Some("1.2.3-1".to_string()),
+            description: Some("A retired dependency".to_string()),
+            installed_size: Some("3.14 MiB".to_string()),
+            install_reason: Some("Installed as a dependency for another package".to_string()),
+        };
+
+        assert!(matches_orphan_keyword(&entry, "old retired"));
+        assert!(matches_orphan_keyword(&entry, "3.14"));
+        assert!(!matches_orphan_keyword(&entry, "visual"));
+    }
+
+    #[test]
+    fn orphan_remove_commands_reject_empty_targets() {
+        assert!(build_preview_remove_orphans_command(&[]).is_err());
+        assert!(build_remove_orphans_command(&[]).is_err());
+    }
+
+    #[test]
+    fn validates_orphan_remove_targets_against_audit() {
+        let audited = vec![OrphanPackageSummary {
+            name: "old-lib".to_string(),
+            version: None,
+            description: None,
+            installed_size: None,
+            install_reason: None,
+        }];
+
+        assert_eq!(
+            validate_orphan_remove_targets(&["old-lib".to_string()], &audited).unwrap(),
+            vec!["old-lib".to_string()]
+        );
+        assert!(validate_orphan_remove_targets(&["other".to_string()], &audited).is_err());
+    }
+
+    #[test]
+    fn constructs_orphan_remove_command_targets() {
+        let packages = vec!["old-lib".to_string(), "unused-lib".to_string()];
+        let preview = build_preview_remove_orphans_command(&packages).unwrap();
+        let remove = build_remove_orphans_command(&packages).unwrap();
+
+        assert_eq!(preview.get_program(), "pacman");
+        assert_eq!(
+            preview
+                .get_args()
+                .map(|arg| arg.to_string_lossy().to_string())
+                .collect::<Vec<_>>(),
+            vec!["-Rns", "--print", "--", "old-lib", "unused-lib"]
+        );
+        assert_eq!(remove.get_program(), "sudo");
+        assert_eq!(
+            remove
+                .get_args()
+                .map(|arg| arg.to_string_lossy().to_string())
+                .collect::<Vec<_>>(),
+            vec!["-n", "pacman", "-Rns", "--", "old-lib", "unused-lib"]
+        );
     }
 
     #[test]
