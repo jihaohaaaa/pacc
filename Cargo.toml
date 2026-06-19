@@ -1,0 +1,18 @@
+[package]
+name = "pacc"
+version = "0.1.0"
+description = "A TUI assistant for pacman, paru, and AUR workflows on Arch Linux"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/jihaohaaaa/pacc"
+homepage = "https://github.com/jihaohaaaa/pacc"
+documentation = "https://docs.rs/pacc"
+keywords = ["archlinux", "pacman", "paru", "aur", "tui"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+color-eyre = "0.6"
+crossterm = "0.29"
+ratatui = "0.30"
