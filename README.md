@@ -23,7 +23,8 @@ The current build includes:
 - A Rust TUI built with `ratatui` and `crossterm`
 - Basic app state, focus management, and keyboard navigation
 - Backend detection for `pacman` and `paru`
-- Placeholder package and action panels for future integration
+- Keyword search over local `paru` cache and clone metadata
+- Cache entry inspection for PKGBUILD, git metadata, and archived package files
 
 ## Planned Features
 
@@ -42,8 +43,11 @@ cargo run
 Default keys:
 
 - `Tab`: switch focus
-- `j` / `k`: move selection
-- `Enter`: trigger the selected action stub
+- `/`: enter `paru` cache search mode
+- `Space`: toggle selection for the highlighted cache entry
+- `d`: open delete confirmation for the selected cache entry
+- `Up` / `Down`: move selection
+- `Enter`: inspect the selected cache entry or trigger the selected action stub
 - `r`: refresh backend detection
 - `q` or `Esc`: quit
 
@@ -56,7 +60,7 @@ cargo check
 
 ## Publishing
 
-The intended crates.io package name is [`pacc`](https://crates.io/crates/pacc).
+This crate is published on crates.io as [`pacc`](https://crates.io/crates/pacc).
 
 ## License
 
